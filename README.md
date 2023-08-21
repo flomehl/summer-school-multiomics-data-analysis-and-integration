@@ -32,7 +32,7 @@ Technical
 You are required to bring your own laptop, more instructions will be communicated to the course participants.
 
 
-Schedule - CET time zone
+## Schedule - CET time zone
 D0 - Sunday 3 September
 Evening: arrival, check-in, dinner
 
@@ -55,18 +55,10 @@ D5 - Friday 8 September
 Presentations: Application to your research project
 ~14h: End of the event.
 
-
-## Application
-Application is now closed, with a long waiting list.
-
-Please note that while the school is oversubscribed, we will need to start the validation process early June. Thank you for your understanding.
-
-The registration fees (including accommodation in double rooms and meals) for academics are 650 EUR/CHF and 1000 EUR/CHF for for-profit companies. A special discount price will be available for the members of the SIB PhD Training Network and for the members of IFB.
-
-
 ## Venue and Time
 This course will take place in the Centre de Vacances et Colloques Paul Langevin (CNRS), in the village of Aussois (Savoie, France).
 
 The event will start on Sunday evening and end on Friday around lunch time.
 
+## Course material
 
