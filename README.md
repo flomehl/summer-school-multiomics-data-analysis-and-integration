@@ -1,33 +1,72 @@
-# Course website template
+# Summer School Multi-omics Data Analysis and Integration
 
-This website is generated with [MkDocs](https://www.mkdocs.org/), with the theme [Material](https://squidfunk.github.io/mkdocs-material/).
+## Overview
+Researchers often have access to or generate multiple omics data (RNAseq, metabolomics, lipidomics, proteomics…) within a single study. Although each omics data is usually analyzed individually, combining complementary data can yield a better understanding of the mechanisms involved in biological processes. Several integrative approaches are now available to combine such data, coming essentially from two families of methods, namely multivariate statistical analyses and network-based approaches. During this summer school both methodologies will be covered, introducing RGCCA and mixOmics for multivariate analyses and WGCNA and SNF for network-based strategies. To get meaningful biological information, the interpretation of statistical results needs to be done contextualizing them in the available biological knowledge. To address this major step we need to be able to access and interrogate databases. We will harness this subject introducing semantic web and knowledge graphs in the context of metabolic networks.
 
-To host it locally, install MkDocs:
-```bash
-pip install mkdocs
-```
+During the School, significant time will be devoted to hands-on and the program will be divided into three phases / topics:
 
-and Material:
-```bash
-pip install mkdocs-material
-```
+Multivariate statistical analyses (Instructors: Arnaud Gloaguen & Jimmy Vandel)
+Network-based approaches (Instructors: Morgane Térézol & Marie-Galadriel Brière)
+Results contextualisation: an introduction to metabolic models, web semantic and knowledge graphs (Instructors: Jean-Clément Gallardo, Maxime Delmas & Marco Pagni)
+The participants will work in groups and shortly present the application of what they have learned to their own project.
 
-Fork this repository and clone it to your local computer. Then, make the repository your current directory and type:
 
-```bash
-mkdocs serve
-```
+## Audience
+This course is addressed to life scientists and biomedical researchers (mostly PhD students and postdocs) working with more than one omics data.
 
-To host it locally.
 
-Check it out with your browser at [http://localhost:8000/](http://localhost:8000/).
+## Learning outcomes
+At the end of the course, the participants should be able to:
 
-For an automatically generated github page, you can run:
+analyze their data in an integrative manner
+contextualize their results with available databases
 
-```sh
-mkdocs gh-deploy
-```
+## Prerequisites
+Knowledge / competencies
+The level of this course is intermediate, with the following requirements:
 
-This will generate a webpage at:
+experience with at least one omic technique
+basic statistics
+R programming
+Technical
+You are required to bring your own laptop, more instructions will be communicated to the course participants.
 
-https://yourname.github.io/reponame
+
+Schedule - CET time zone
+D0 - Sunday 3 September
+Evening: arrival, check-in, dinner
+
+D1 - Monday 4 September
+Morning: general overview
+Afternoon: Multivariate statistical analyses
+
+D2 - Tuesday 5 September
+Morning: Multivariate statistical analyses
+Afternoon: Network-based approaches
+
+D3 - Wednesday 6 September
+Morning: Network-based approaches
+Afternoon: social activity
+
+D4 - Thursday 7 September
+Morning & Afternoon: Results contextualisation: an introduction to metabolic models, web semantic and knowledge graphs
+
+D5 - Friday 8 September
+Presentations: Application to your research project
+~14h: End of the event.
+
+
+## Application
+Application is now closed, with a long waiting list.
+
+Please note that while the school is oversubscribed, we will need to start the validation process early June. Thank you for your understanding.
+
+The registration fees (including accommodation in double rooms and meals) for academics are 650 EUR/CHF and 1000 EUR/CHF for for-profit companies. A special discount price will be available for the members of the SIB PhD Training Network and for the members of IFB.
+
+
+## Venue and Time
+This course will take place in the Centre de Vacances et Colloques Paul Langevin (CNRS), in the village of Aussois (Savoie, France).
+
+The event will start on Sunday evening and end on Friday around lunch time.
+
+
