@@ -1,0 +1,945 @@
+---
+title: "Topic 3 - Enrichment analyses and contextualisation of results with Knowledge
+  Graphs"
+author: "Maxime Delmas"
+date: "2023-08-02"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+library(clusterProfiler)
+library(DOSE)
+library(AnnotationHub)
+library(neo4r)
+library(GO.db)
+library(GOxploreR)
+library(data.table)
+library(annotate)
+library(DT)
+library(visNetwork)
+```
+
+# Case study: Pan Cancer downstream analysis BRCA - TCGA-BRCA project
+
+* Data:
+  * 5 normal samples
+  * 5 tumor samples
+
+The full pipeline analysis of the raw data can be found [here](https://master.bioconductor.org/packages/release/bioc/vignettes/TCGAbiolinks/inst/doc/analysis.html).
+More info on the original project [here](https://portal.gdc.cancer.gov/projects/TCGA-BRCA)
+
+# Accessing and processing the original raw data
+
+Raw data are first downloaded, pre-processsed, normalized and filtered. Then, the differential expression analysis is computed with the standard pipeline provided by the TCGAbiolinks package.
+
+Alternatively, one can directly load the final result table in the next chunck.
+```{r, include = FALSE}
+
+listSamples <- c(
+    "TCGA-E9-A1NG-11A-52R-A14M-07", "TCGA-BH-A1FC-11A-32R-A13Q-07",
+    "TCGA-A7-A13G-11A-51R-A13Q-07", "TCGA-BH-A0DK-11A-13R-A089-07",
+    "TCGA-E9-A1RH-11A-34R-A169-07", "TCGA-BH-A0AU-01A-11R-A12P-07",
+    "TCGA-C8-A1HJ-01A-11R-A13Q-07", "TCGA-A7-A13D-01A-13R-A12P-07",
+    "TCGA-A2-A0CV-01A-31R-A115-07", "TCGA-AQ-A0Y5-01A-11R-A14M-07"
+)
+
+# Query platform Illumina HiSeq with a list of barcode 
+query <- GDCquery(
+    project = "TCGA-BRCA", 
+    data.category = "Transcriptome Profiling",
+    data.type = "Gene Expression Quantification",
+    barcode = listSamples
+)
+
+# Download a list of barcodes with platform IlluminaHiSeq_RNASeqV2
+GDCdownload(query)
+
+# Prepare expression matrix with geneID in the rows and samples (barcode) in the columns
+# rsem.genes.results as values
+BRCA.Rnaseq.SE <- GDCprepare(query)
+
+BRCAMatrix <- assay(BRCA.Rnaseq.SE, "unstranded")
+
+# For gene expression if you need to see a boxplot correlation and AAIC plot to define outliers you can run
+BRCA.RNAseq_CorOutliers <- TCGAanalyze_Preprocessing(BRCA.Rnaseq.SE)
+
+# normalization of genes
+dataNorm <- TCGAanalyze_Normalization(
+    tabDF = BRCA.RNAseq_CorOutliers, 
+    geneInfo =  geneInfoHT
+)
+
+# quantile filter of genes
+dataFilt <- TCGAanalyze_Filtering(
+    tabDF = dataNorm,
+    method = "quantile", 
+    qnt.cut =  0.25
+)
+
+# selection of normal samples "NT"
+samplesNT <- TCGAquery_SampleTypes(
+    barcode = colnames(dataFilt),
+    typesample = c("NT")
+)
+
+# selection of tumor samples "TP"
+samplesTP <- TCGAquery_SampleTypes(
+    barcode = colnames(dataFilt), 
+    typesample = c("TP")
+)
+
+# Diff.expr.analysis (DEA) --  not cutoff
+dataDEGs <- TCGAanalyze_DEA(
+    mat1 = dataFilt[,samplesNT],
+    mat2 = dataFilt[,samplesTP],
+    Cond1type = "Normal",
+    Cond2type = "Tumor",
+    method = "glmLRT"
+)
+
+# Only gene products
+filtered_dataDEGs <- dataDEGs[dataDEGs$gene_type == "protein_coding", ]
+
+# Data are saved.
+write.table(filtered_dataDEGs, "../data/tcga_brca_dge.tsv", sep = "\t", col.names = T, row.names = F)
+```
+
+## Loading and filtering differential analyses results
+
+* Load the *data.rda* file containing the output of the differential expression analysis.
+* Extract universe as the list of gene labels
+* Apply cutoffs on **fdr (aka q.value)** and **logFC** to select an initial list of significantly differentially expressed genes. We start by applying a standard $|LogFC| > 1$ and $q.value < 1e-2$.
+* Select the list of gene labels associated with this set
+
+```{r}
+# Load data and extract all gene symbols, i.e the future universe
+load("data.rda")
+universe <- unique(data$gene_name)
+
+# Filtering data and extract symbols 
+filtered_data <- data[abs(data$logFC) > 1 & data$FDR < 0.01, ]
+DE.set <- unique(filtered_data$gene_name)
+```
+
+## Get annotations to GO
+
+To extract the annotations to the Gene Ontology, we are gonna use the **AnnotationHub** service, using the code to extract data for *Homo Sapiens*, key: "AH111575"
+
+```{r, message = FALSE}
+hub <- AnnotationHub()
+query(hub, "Homo Sapiens")
+
+# Get the OrgDB reference annotation: org.Hs.eg.db.sqlite
+HS.annotation <- hub[["AH111575"]]
+```
+
+
+## GO Over-Representation Analysis
+
+### Compute ORA on Biological Processes
+
+Compute an ORA analysis on the previously extracted list of differentially expression genes and Gene Ontology.
+
+* library: clusterProfiler
+
+See **?enrichGO** for details on the arguments.
+
+We use the list of significantly differentially expressed genes and the whole list of protein coding genes in the assay as *universe*. No contrain applied on the size of GO terms sets.
+
+Then, we plot.
+
+```{r}
+ego <- enrichGO(gene = DE.set,
+                universe = universe,
+                OrgDb = HS.annotation,
+                ont = "BP",
+                keyType = "SYMBOL",
+                pAdjustMethod = "BH", 
+                minGSSize = 1,
+                maxGSSize = 100000)
+
+```
+
+
+```{r}
+DT::datatable(ego@result, options = list(pageLength = 50))
+```
+
+
+
+```{r, out.width="100%", fig.width = 16, fig.height = 12, message=FALSE}
+dotplot(ego, showCategory=20, font.size=25) +
+  theme(legend.key.size = unit(2, 'cm'), legend.text = element_text(size=25), legend.title = element_text(size=25))
+```
+
+### Vizualise ORA on the Gene Ontology DAG graph for a specific enriched GO term
+
+```{r, include=FALSE}
+prep_parents_graph <- function(go.ids) {
+    
+    #dublicate each row according to the number of parents
+    df <- data.frame(GO_id = go.ids)
+    
+    if(!"n_PARENTs" %in% colnames(df)) {
+
+        df$n_PARENTs <- sapply(df$GO_id, function(x){return(length(unique(GOBPPARENTS[[x]])))}) 
+    }    
+    edges <- as.data.frame(lapply(df, rep, df$n_PARENTs)) %>%
+        dplyr::select(c("GO_id"))
+
+    #sapply(spl$GO_id, function(x) GOBPPARENTS[[x]]) 
+
+    #fill the 'to' column with parents and 'title column' with relations 
+    all_edges <- NULL
+    for(id in unique(edges$GO_id) ) {
+        tmp <- filter(edges, GO_id == id, )
+        tmp$to <- GOBPPARENTS[[id]]
+        tmp$title <- names(GOBPPARENTS[[id]])
+        all_edges <- rbind(all_edges, tmp )
+    }
+
+    #rename and add colors
+    edges <- all_edges %>%
+        dplyr::rename("from" = "GO_id") %>%
+        mutate(color = ifelse(title == "isa", "#1C588C",
+                       ifelse(title == "positively regulates", "#2D735F",
+                       ifelse(title == "negatively regulates", "#BF5841",
+                       ifelse(title == "regulates", "#BF9039",
+                       ifelse(title == "part of", "black",
+                       ifelse(title == "has part", "gray", NA
+                             )     )     )      )      )      ))
+
+    #make nodes
+    nodes <- data.frame(id = unique(c(edges$from, edges$to)) )
+    nodes <- nodes %>%
+        filter(id != "all") %>% # 'all' is the parent of the root term in GOBPPARENTS  
+        mutate(level = GOTermBPOnLevel(id)$Level,
+               label = paste0(id, "\n", unlist(getGOTerm(id))) %>% str_wrap(width = 10), #get go terms and wrap words into paragraphs
+               shape = "box",
+               color.background = ifelse(id %in% df$GO_id,"white", "beige"), 
+               font.color = "black",
+               title = getGOTerm(id) %>% unlist %>% str_wrap(width = 10))
+
+    #make legend for colors
+    leg_edges <- edges %>% dplyr::select("title", "color") %>%
+        unique %>%
+        mutate(label = title, .keep = "unused") 
+
+    out <- list(nodes, edges, leg_edges)
+    names(out) <- c("nodes", "edges", "leg_edges")
+    return(out)
+}
+
+displaypal<-function(mypal)
+{
+  k<-length(mypal)
+  image(1:k, 1, as.matrix(1:k), col =mypal, xlab = paste(k," classes",sep=""), ylab = "", xaxt = "n", yaxt = "n",bty = "n")
+}
+```
+
+* Source: https://www.kaggle.com/code/antoninadolgorukova/gene-ontology-explorer/notebook#GO-term-tracking-in-GO-GAD
+* See document for visNetwork [here](https://datastorm-open.github.io/visNetwork/)
+
+* Focus on the "nuclear division" GO term- (GO:0000280)
+
+* The visualization of the DAG allows to appreciate the hierarchical relations between the enriched terms and identify the different levels of enrichment.
+
+```{r}
+# Get ancestors and direct children
+GO.term <- "GO:0000280"
+GO_ancestors <- sapply(GO.term, function(x) {GOBPANCESTOR[[x]]})
+GO_children <- sapply(GO.term, function(x) {GOBPCHILDREN[[x]]})
+GO_hierarchy <- unique(c(GO.term, unlist(GO_ancestors), unlist(GO_children)))
+
+# Map enrichment results
+GO_hierarchy <- GO_hierarchy[! is.na(GO_hierarchy)]
+
+# Prepare nodes
+dom_graph <- prep_parents_graph(GO_hierarchy)
+nodes <- dom_graph$nodes
+fdrScalePal <- colorRampPalette(c('#E0F4FF', "#ff8829"))
+fdrScale <- fdrScalePal(100)
+
+# Prepare data for plot
+nodes <- nodes %>% 
+  left_join((ego@result %>% dplyr::select(ID, GeneRatio, BgRatio, qvalue)), by = c("id"="ID")) %>% 
+  mutate(label = paste(label, paste0("GeneRatio=", GeneRatio), paste0("BgRatio=", BgRatio), paste0("qvalue=", signif(qvalue, 3)), sep = "\n"), fdrscale.val=-log10(qvalue)) %>% 
+  replace_na(list(fdrscale.val=0)) %>% 
+  mutate(color.background = fdrScale[cut(fdrscale.val, breaks = 100)]) %>%
+  dplyr::select(-c(GeneRatio, qvalue, fdrscale.val))
+
+# Plot graph 
+plot <- visNetwork(nodes, dom_graph$edges, width="100%", height = 1000,
+           main=paste0("Explore GO BP enrichment in GO DAG ontology"),) %>%
+    visOptions(highlightNearest = list(enabled = TRUE, algorithm = "hierarchical"), selectedBy = "label") %>%
+    visPhysics(solver = "hierarchicalRepulsion", hierarchicalRepulsion = list(avoidOverlap = 1)) %>%
+    visHierarchicalLayout(direction = "UD", blockShifting=FALSE, nodeSpacing=200) %>%
+    visLegend(addEdges = dom_graph$leg_edges)
+visSave(plot, "nuclear_division_dag_vizu.html")
+```
+
+Visualize the graph on the exported html document: *nuclear_division_dag_vizu.html*
+
+### Vizualise all ORA on the Gene Ontology DAG graph
+
+* Select only the GO terms enriched with a q.value $< 1e-2$ and the union of all their ancestors. 
+
+* Different regions of the DAG are enriched.
+
+```{r}
+# Get only ancestors
+selected_go_bp <- ego@result[ego@result$qvalue <= 1e-2, ]$ID
+all_ego_dag <- sapply(selected_go_bp, function(x) {GOBPANCESTOR[[x]]})
+all_ego_dag <- unique(c(selected_go_bp, unlist(all_ego_dag)))
+
+# Map enrichment results
+all_ego_dag <- all_ego_dag[! is.na(all_ego_dag)]
+
+# Prepare nodes
+dom_graph <- prep_parents_graph(all_ego_dag)
+nodes <- dom_graph$nodes
+fdrScalePal <- colorRampPalette(c('#E0F4FF', "#ff8829"))
+fdrScale <- fdrScalePal(100)
+
+nodes <- nodes %>% 
+  left_join((ego@result %>% dplyr::select(ID, GeneRatio, BgRatio, qvalue)), by = c("id"="ID")) %>% 
+  mutate(label = paste(label, paste0("GeneRatio=", GeneRatio), paste0("BgRatio=", BgRatio), paste0("qvalue=", signif(qvalue, 3)), sep = "\n"), fdrscale.val=-log10(qvalue)) %>% 
+  replace_na(list(fdrscale.val=0)) %>% 
+  mutate(color.background = fdrScale[cut(fdrscale.val, breaks = 100)]) %>%
+  dplyr::select(-c(GeneRatio, qvalue, fdrscale.val))
+
+# Plot graph 
+plot <- visNetwork(nodes, dom_graph$edges, width="100%", height = 1000,
+           main=paste0("Explore GO BP enrichment in GO DAG ontology"),) %>%
+    visOptions(highlightNearest = list(enabled = TRUE, algorithm = "hierarchical"), selectedBy = "label") %>%
+    visPhysics(solver = "hierarchicalRepulsion", hierarchicalRepulsion = list(avoidOverlap = 1)) %>%
+    visHierarchicalLayout(direction = "UD") %>%
+    visLegend(addEdges = dom_graph$leg_edges)
+visSave(plot, "ego_dag_vizu.html")
+```
+
+Visualize the graph on the exported html document: *ego_dag_vizu.html*
+
+## KEGG Over-Representation Analysis
+
+* Same as with GO, but with KEGG pathways.
+
+* Adapt the identifiers for KEGG: needs *ENTREZID* instead of gene *SYMBOLS*
+
+```{r, message = FALSE}
+# Mapping between Gene symbol and Entrez ID
+universe2 <- bitr(universe, fromType="SYMBOL", toType = "ENTREZID", OrgDb = HS.annotation)
+universe2 <- universe2$ENTREZID
+
+DE.set2 <- bitr(DE.set, fromType="SYMBOL", toType = "ENTREZID", OrgDb = HS.annotation)
+DE.set2 <- DE.set2$ENTREZID
+
+ekegg <- enrichKEGG(
+  gene = DE.set2,
+  organism = "hsa",
+  keyType = "ncbi-geneid",
+  pAdjustMethod = "BH",
+  universe = universe2,
+  use_internal_data = FALSE)
+```
+
+```{r}
+DT::datatable(ekegg@result, options = list(pageLength = 50))
+```
+
+```{r,  out.width="100%", fig.width = 16, fig.height = 12, message=FALSE}
+dotplot(ekegg, showCategory=20, font.size=25) +
+  theme(legend.key.size = unit(2, 'cm'), legend.text = element_text(size=25), legend.title = element_text(size=25))
+```
+
+
+## Reproducting the ClusterProfiler analysis manually (Example "neurotransmitter transport" - GO:0006836)
+
+Have a look at the GO-term “neurotransmitter transport” (GO:0006836)
+
+### With a right-tailed fisher exact test
+
+To build the contingency table, we need:
+
+- The size of the universe
+- The size of the gene set
+- The size of the GO-term gene set
+- The number of gene that overlap between the two sets.
+
+```{r, message = FALSE}
+# Get all annotation between NCBI Gene Symbol and GO-terms 
+all <- AnnotationDbi::select(HS.annotation, keytype="SYMBOL", keys=universe, columns="GOALL")
+
+# Retrieve all GENE Symbols associated to neurotransmitter transport
+table.GO.0006836 <- AnnotationDbi::select(HS.annotation, keytype="GOALL", keys="GO:0006836", columns="SYMBOL")
+GO.0006836 <- unique(table.GO.0006836$SYMBOL)
+
+# get the "real" universe size : remove all symbols without annotation to any BP from the universe
+all_BP_universe <- all %>% filter(! is.na(ONTOLOGYALL)) %>% filter(ONTOLOGYALL == "BP")
+manual_universe <- universe[universe %in% all_BP_universe$SYMBOL]
+
+# get the "real" gene set size also by excluding genes without annotation to BP
+manual_gene_set <- DE.set[DE.set %in% all_BP_universe$SYMBOL]
+
+# Remove symbols associated to GO:0006836 that are not in our universe
+GO.0006836 <- GO.0006836[GO.0006836 %in% manual_universe]
+
+# Get intersection size
+intersection <- sum(manual_gene_set %in% GO.0006836)
+```
+
+* Building the contingency table:
+```{r}
+L_GO_set <- length(GO.0006836)
+L_DE_set <- length(manual_gene_set)
+L_universe <- length(manual_universe)
+contingency.table <- matrix(c(intersection, L_DE_set - intersection, L_GO_set - intersection, L_universe - intersection - (L_DE_set - intersection) - (L_GO_set - intersection)), ncol = 2, byrow = T)
+f.test <- fisher.test(contingency.table, alternative = "greater")
+print(f.test$p.value)
+```
+
+We retrieve the exact p-value as computed by *ClusterProfiler*.
+
+### With an Hypergeomtric test:
+
+```{r}
+phyper(q = (intersection - 1), m = L_GO_set, n = L_universe - L_GO_set, k = L_DE_set, lower.tail = F)
+```
+
+### With simulations
+
+To better grasp what do these probabilities mean, we are gonna randomly sample $k$ gene symbols from the universe, where $k$ is our gene set size, and estimate our frequently we observed at least as much gene that overlap with the set of the selected GO term (GO:0006836).
+
+```{r}
+# Draw 1000.000 sample of size L_DE_set from manual_universe
+N_SAMPLES <- 1000000
+samples <- vector(mode = "numeric", length = N_SAMPLES)
+for(i in 1:N_SAMPLES){
+    s <- sample(size = L_DE_set, x = manual_universe, replace = F)
+    samples[i] <- sum(s %in% GO.0006836)
+}
+hist(x=samples, freq = F, breaks = seq(0,33,1))
+a <- sum(samples >= intersection)
+print(paste("Estinate: ", a / N_SAMPLES))
+```
+
+We get a good estimate of the previously observed *p.values*.
+
+## Studying the impact of the universe (*background set*) on the enrichment results:
+
+* What if you don't use an assay-specific universe, but simply the whole transcriptome ?
+
+```{r}
+ego.no.bg <- enrichGO(gene = DE.set,
+                universe = NULL, # Don't precise the universe !
+                OrgDb = HS.annotation,
+                ont = "BP",
+                keyType = "SYMBOL",
+                pAdjustMethod = "BH",
+                minGSSize = 1,
+                maxGSSize = 100000)
+
+# Align, order, select top 20 and plot
+comparison.bg <- ego.no.bg@result %>% dplyr::select(ID, pvalue) %>% left_join((ego@result %>% dplyr::select(ID, pvalue)),  by = "ID")
+rownames(comparison.bg) <- NULL
+colnames(comparison.bg) <- c("GO.ID", "unspecific.universe", "universe")
+comparison.bg <- comparison.bg[order(comparison.bg$unspecific.universe, decreasing = F), ]
+
+top.comparison.bg <- comparison.bg[1:20, ]
+data.plot <- top.comparison.bg %>% pivot_longer(cols = c("unspecific.universe", "universe")) 
+data.plot$GO.ID <- factor(data.plot$GO.ID, levels = top.comparison.bg$GO.ID)
+```
+
+How do the *p.values* for the top-10 enriched GO-terms evolved ?
+
+```{r, out.width="100%", fig.width = 16, fig.height = 12, message=FALSE}
+data.plot %>% ggplot(aes(x = GO.ID, y = -log10(value), fill = name)) + geom_bar(stat = "identity", position = "dodge") + theme_classic() + theme(axis.text.x = element_text(angle=90, hjust=1), axis.text = element_text(size = 25), axis.title = element_text(size = 22), legend.title = element_text(size=20), legend.text = element_text(size=20), legend.key.size = unit(2, 'cm'))
+```
+
+How much significantly enriched GO-terms are detected with the both universe?
+
+```{r}
+print(paste("Number of enriched BP with assay-specific universe: ", nrow(ego@result[ego@result$qvalue <= 1e-3, ])))
+print(paste("Number of enriched BP without assay-specific universe: ", nrow(ego.no.bg@result[ego.no.bg@result$qvalue <= 1e-3, ])))
+```
+
+* The number of enriched GO terms is different.
+
+* The *p.value* is over-estimated.
+
+## Studying the impact of the cutoff choices or database choices on the enrichment results
+
+There are two main other choices that can affect the enrichment results.
+
+- the choice of the reference database, or even its version
+- the cutoff applied on the *p.value* / LogFC.
+
+We are gonna test 6 combinations: (GO BP v.2013, GO BP v.2021, GO BP v.2023) $\times$ ($q.value < 0.1$, $q.value < 0.01$)    
+
+```{r}
+
+# Loading different versions of the GO-BPs from EnrichR database.
+path <- "./BP-archive/"
+ontology_files <- c("GO_Biological_Process_2023", "GO_Biological_Process_2021", "GO_Biological_Process_2013") # , "GO_Biological_Process_2017", 
+
+# RETURN TERM2GENE and TERM2NAME 
+parse_ontology <- function(ontology_file){
+  
+  terms <- c()
+  genes <- c()
+  names <- c()
+
+  for(line in read_lines(ontology_file)){
+      parsed_line <- str_split(line, pattern = "\t", simplify = T)
+      preprocessed_name <- parsed_line[1]
+      parsed_preprocessed_name <- str_split(preprocessed_name, pattern = "[()]", simplify = T)
+      name <- substr(parsed_preprocessed_name[1], 1, nchar(parsed_preprocessed_name[1]) - 1)
+      term <- parsed_preprocessed_name[length(parsed_preprocessed_name) - 1]
+      genes_list <- parsed_line[3:length(parsed_line)]
+      genes_list <- genes_list[genes_list != ""]
+  
+      terms <- c(terms, rep(term, length(genes_list)))
+      genes <- c(genes, genes_list)
+      names <- c(names, name)
+  }
+  
+  term2genes <- data.frame(TERM=terms, GENE=genes)
+  term2name <- data.frame(TERM=unique(terms), NAME = names)
+  
+  return(list("term2gene" = term2genes, "term2name" = term2name))
+}
+
+
+threshold_vector <- list(c(1, 0.01), c(1, 0.1))  # c(1, 0.05), 
+
+out <- data.frame()
+
+for(ontology_file in ontology_files){
+    
+    ont <- parse_ontology(file.path(path, ontology_file))
+    
+    for(thresholds in threshold_vector){
+      th_fc <- thresholds[1]
+      th_pv <- thresholds[2]
+      
+      # Filtering data and extract symbols 
+      DE.set.eval <- unique(data[abs(data$logFC) > th_fc & data$FDR < th_pv, ]$gene_name)
+      print(paste("Number of signficiant genes with logFC >", th_fc, "q.value <", th_pv, ":", length(DE.set.eval)))
+      ego.eval <- enricher(gene = DE.set.eval,
+                  universe = universe,
+                  TERM2GENE = ont$term2gene,
+                  TERM2NAME = ont$term2name,
+                  minGSSize = 1,
+                  maxGSSize = 100000,
+                  pAdjustMethod = "BH")
+      
+      sub.out <- ego.eval@result
+      sub.out["threshold"] <- paste0("|LogFC| > ", th_fc, "; q.v < ", th_pv)
+      sub.out["ontology"] <- ontology_file
+      
+      out <-  rbind(out, sub.out)
+      }
+}
+
+reorder_within <- function(x, by, within1, within2, fun = mean, sep = "___", ...) {
+    new_x <- paste(x, paste0(within1, within2), sep = sep)
+    stats::reorder(new_x, by, FUN = fun)
+}
+
+scale_x_reordered <- function(..., sep = "___") {
+    reg <- paste0(sep, ".+$")
+    ggplot2::scale_x_discrete(labels = function(x) gsub(reg, "", x), ...)
+}
+```
+
+```{r, out.width="100%", fig.width = 16, fig.height = 12, message=FALSE}
+# Plot
+out %>% dplyr::select(ID, Description, pvalue, threshold, ontology) %>% 
+  group_by(threshold, ontology) %>% 
+  slice(1:10) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = reorder_within(Description, -log10(pvalue), threshold, ontology), y = -log10(pvalue))) + 
+    geom_bar(stat = "identity") + 
+    coord_flip() + 
+    scale_fill_brewer(palette="Spectral") + 
+    theme_classic() + 
+    scale_x_reordered() +
+    theme(axis.text = element_text(size = 10)) +
+    facet_wrap(as.factor(threshold) ~ as.factor(ontology), scales="free_y")
+
+```
+
+- The bias effects combine !
+
+- The enriched terms and their order are affected.
+
+- On the cutoff choices, there is a trade-off between noise and detection sensibility.
+
+Maybe there is an other method that can prevent from imposing a threshold ?
+
+## GSEA
+
+-  We need a ranking metric: we choose the LogFC. But *p.value*, or a mixture of the both can also be used. 
+
+- We set no constrains on the GO terms gene set sizes.
+
+```{r}
+# apply gsea (with gene set permutation)
+ordered.genes <- data %>% arrange(desc(logFC))
+gsea.input <- ordered.genes$logFC
+names(gsea.input) <- ordered.genes$gene_name
+res.gsea.go <- gseGO(geneList = gsea.input, 
+      ont = "BP",
+      OrgDb = HS.annotation,
+      keyType = "SYMBOL",
+      pAdjustMethod = "BH",
+      minGSSize = 1, 
+      maxGSSize = 100000,
+      pvalueCutoff = 1)
+```
+
+```{r}
+DT::datatable(res.gsea.go@result, options = list(pageLength = 50))
+```
+
+```{r, out.width="100%", fig.width = 16, fig.height = 12, message=FALSE}
+dotplot(res.gsea.go, font.size=20, showCategory=10, split=".sign", x="GeneRatio", decreasing = TRUE, color="qvalue") + 
+  scale_colour_gradient(low="red", high="blue", limits = c(1e-10, 0.01), guide=guide_colorbar(reverse=FALSE) ) +
+  facet_grid(. ~ .sign) +
+  theme(legend.key.size = unit(2, 'cm'), legend.text = element_text(size=25), legend.title = element_text(size=25))
+```
+
+- The *NES* scores (and also *ES*) allow to determine the direction of enrichment: **activated** or **supressed**.
+
+### Vizualise ORA on the Gene Ontology DAG graph for a specific enriched GO term:
+
+- *monocarboxylic acid metabolic process* (GO:0032787) which is **suppressed**.
+
+- *neurotransmitter transport* (GO:0000280) which is **activated**.
+
+Visualize the GO-terms relationships around the two enriched GO terms .
+
+```{r}
+# Get only ancestors
+# selected_go_bp_gsea <- res.gsea.go@result[res.gsea.go@result$qvalue <= 1e-2, ]$ID
+selected_go_bp_gsea <- c("GO:0000280", "GO:0032787")
+
+all_ego_dag_gsea <- sapply(selected_go_bp_gsea, function(x) {GOBPANCESTOR[[x]]})
+all_ego_dag_gsea <- unique(c(selected_go_bp_gsea, unlist(all_ego_dag_gsea)))
+
+# Map enrichment results
+all_ego_dag_gsea <- all_ego_dag_gsea[! is.na(all_ego_dag_gsea)]
+
+# Prepare nodes
+dom_graph <- prep_parents_graph(all_ego_dag_gsea)
+nodes <- dom_graph$nodes
+fdrScalePal <- colorRampPalette(c('#E0F4FF', "#ff8829"))
+fdrScale <- fdrScalePal(100)
+
+nodes <- nodes %>% 
+  left_join((res.gsea.go@result %>% dplyr::select(ID, setSize, NES, qvalue)), by = c("id"="ID")) %>% 
+  mutate(label = paste(label, paste0("setSize=", setSize), paste0("NES=", signif(NES, 3)), paste0("qvalue=", signif(qvalue, 3)), sep = "\n"), fdrscale.val=-log10(qvalue)) %>% 
+  replace_na(list(fdrscale.val=0)) %>% 
+  mutate(color.background = fdrScale[cut(fdrscale.val, breaks = 100)]) %>%
+  mutate(borderWidth = 3) %>%
+  mutate(color.border = ifelse(NES > 0, "red", "blue")) %>%
+  dplyr::select(-c(setSize, NES, fdrscale.val))
+
+# Plot graph 
+plot <- visNetwork(nodes, dom_graph$edges, width="100%", height = 1000,
+           main=paste0("Explore GO BP enrichment in GO DAG ontology - GSEA"),) %>%
+    visOptions(highlightNearest = list(enabled = TRUE, algorithm = "hierarchical"), selectedBy = "label") %>%
+    visPhysics(solver = "hierarchicalRepulsion", hierarchicalRepulsion = list(avoidOverlap = 1)) %>%
+    visHierarchicalLayout(direction = "UD") %>%
+    visLegend(addEdges = dom_graph$leg_edges)
+visSave(plot, "gsea_dag_vizu.html")
+```
+
+Visualize the graph on the exported html document: *gsea_dag_vizu.html*
+
+- Both Biological Process, but in distinct regions of the DAG.
+- Their enrichment is consistent with their ancestors/children.
+
+## Comparing ORA .vs. GSEA
+
+Comparing significantly enriched GO terms by the both methods: $q.value \le 1e-3$. We are gonna vizualise the differences in terms of enrichment directly on the DAG graph.
+
+```{r, message=FALSE}
+# Select enriched GO terms
+selected_go_bp_gsea <- res.gsea.go@result[res.gsea.go@result$qvalue <= 1e-3, ]$ID
+selected_go_bp_ora <- ego@result[ego@result$qvalue <= 1e-3, ]$ID
+selected_go_bp_comparison <- unique(c(selected_go_bp_gsea, selected_go_bp_ora))
+
+# Get their ancestors
+all_ego_comparison <- sapply(selected_go_bp_comparison, function(x) {GOBPANCESTOR[[x]]})
+all_ego_comparison <- unique(c(selected_go_bp_comparison, unlist(all_ego_comparison)))
+
+# Map enrichment results
+all_ego_comparison <- all_ego_comparison[! is.na(all_ego_comparison)]
+
+# Prepare nodes
+dom_graph <- prep_parents_graph(all_ego_comparison)
+nodes <- dom_graph$nodes
+
+# -1 = only GSEA, 0 = both, 1 = only ORA
+
+nodes <- nodes %>% 
+  mutate(category = ifelse(id %in% selected_go_bp_gsea, -1, 0) + ifelse(id %in% selected_go_bp_ora, 1, 0)) %>%
+  dplyr::select(-color.background) %>%
+  left_join(data.frame(category=c(-1, 0, 1), color.background=c("#cd69a7", "#7fbeaf", "#ee9b69")))
+# set bg color to white for those simply not significants
+nodes[! nodes$id %in% selected_go_bp_comparison, ]$color.background <- "white"
+
+# Plot graph 
+plot <- visNetwork(nodes, dom_graph$edges, width="100%", height = 1000,
+           main=paste0("Explore GO BP enrichment in GO DAG ontology - GSEA"),) %>%
+    visOptions(highlightNearest = list(enabled = TRUE, algorithm = "hierarchical"), selectedBy = "label") %>%
+    visPhysics(solver = "hierarchicalRepulsion", hierarchicalRepulsion = list(avoidOverlap = 1)) %>%
+    visHierarchicalLayout(direction = "UD") %>%
+    visLegend(addEdges = dom_graph$leg_edges)
+visSave(plot, "gsea_comp_ora_dag_vizu.html")
+```
+
+Visualize the graph on the exported html document: *gsea_comp_ora_dag_vizu.html*
+
+While GSEA is much more sensible, there is a significant overlap between the both methods results.
+
+The differences follow the hierarchy.
+
+# Extend contextualisation with Hetionet and Neo4J
+
+## Find the diseases associated to genes from Hetionet
+```{r}
+# build the request
+query.1 = paste0("MATCH (d:Disease)-[r2:ASSOCIATES_DaG]->(g:Gene) WHERE g.name IN [",
+                 paste0("'", paste0(filtered_data$gene_name, collapse = "' ,'"), "'"),
+                 "] RETURN d.identifier, d.name")
+```
+
+
+```{r}
+# Send the request
+con <- neo4j_api$new(url = "https://neo4j.het.io", user = "neo4j", password = "")# 
+result.1 <- query.1 %>% call_neo4j(con)
+
+disease.table <- data.frame(disease.name = result.1$d.name$value)
+```
+
+```{r}
+disease.table %>% group_by(disease.name) %>% summarise(n = n()) %>% arrange(desc(n)) %>% DT::datatable()
+```
+
+## Drugs used to treat the diseases
+```{r}
+query.2 = paste0("MATCH (c:Compound)-[r1:TREATS_CtD]->(d:Disease)-[r2:ASSOCIATES_DaG]->(g:Gene)  WHERE g.name IN [",
+                 paste0("'", paste0(filtered_data$gene_name, collapse = "' ,'"), "'"),
+                 "] RETURN c.identifier, c.name")
+```
+
+```{r}
+result.2 <- query.2 %>% call_neo4j(con)
+
+drug.table <- data.frame(drug.name = result.2$c.name$value)
+```
+
+```{r}
+drug.table %>% group_by(drug.name) %>% summarise(n = n()) %>% arrange(desc(n)) %>% DT::datatable()
+```
+
+To visualize the corresponding graph, go send the query and visualize the graph on the [Neo4J browzer](https://neo4j.het.io/browser). But before, replace the return part of the query with : "RETURN c, r1, d, r2, g"
+
+## Drugs that downregulates the genes that are up-regulated in some diseases context
+
+```{r, echo=FALSE}
+up.regualted <- filtered_data[filtered_data$logFC > 5, ]
+query.4.1 = paste0("MATCH (c:Compound)-[r1:DOWNREGULATES_CdG]->(g:Gene)<-[r2:UPREGULATES_DuG]-(d:Disease) WHERE g.name IN [", 
+                 paste0("'", paste0(up.regualted$gene_name, collapse = "' ,'"), "'"),
+                 "] RETURN c.identifier, c.name, g.name, d.identifier, d.name")
+
+result.4.1 <- query.4.1 %>% call_neo4j(con)
+d.table.1 <- data.frame(c.name = result.4.1$c.name$value, g.name = result.4.1$g.name$value, d.name = result.4.1$d.name$value)
+```
+
+```{r}
+DT::datatable(d.table.1)
+```
+
+# Drugs that downregulates -> genes (here upregulated) <- Disease up-regualtes gene - Only on breast cancer
+```{r}
+up.regualted <- filtered_data[filtered_data$logFC > 5, ]
+query.4.2 = paste0("MATCH (c:Compound)-[r1:DOWNREGULATES_CdG]->(g:Gene)<-[r2:UPREGULATES_DuG]-(d:Disease) WHERE g.name IN [", 
+                 paste0("'", paste0(up.regualted$gene_name, collapse = "' ,'"), "'"),
+                 "] AND d.name = 'breast cancer' RETURN c.identifier, c.name, g.name, d.identifier, d.name, r1, r2")
+
+result.4.2 <- query.4.2 %>% call_neo4j(con)
+d.table.2 <- data.frame(c.name = result.4.2$c.name$value, g.name = result.4.2$g.name$value, d.name = result.4.2$d.name$value, r1 = result.4.2$r1, r2 = result.4.2$r2)
+```
+
+```{r}
+DT::datatable(d.table.2)
+```
+
+See also the details on the relations.
+
+## Creating our own enrichment background set
+
+What are the *PharmacologicClass* of drugs that targets the differentially expressed genes ?
+
+- Extract the information from Hetionet
+- Convert the data to a TERM2GENE and a TERM2NAME tables.
+
+```{r}
+query.bgset <- "MATCH (p:PharmacologicClass)-[r:INCLUDES_PCiC]->(c:Compound)-[r2]->(g:Gene) RETURN DISTINCT g.name, p.identifier, p.name"
+result.bgset <- query.bgset %>% call_neo4j(con)
+
+hetionet.TERM2GENE <- data.frame(TERM = result.bgset$p.identifier$value, GENE = result.bgset$g.name$value)
+hetionet.TERM2NAME <- data.frame(TERM = result.bgset$p.identifier$value, NAME = result.bgset$p.name$value) %>% distinct()
+```
+
+- Compute Enrichment analysis with *Hetionet* derived knowledge:
+
+```{r}
+e.hetionet <- enricher(gene = DE.set,
+                  universe = universe,
+                  TERM2GENE = hetionet.TERM2GENE,
+                  TERM2NAME = hetionet.TERM2NAME,
+                  pAdjustMethod = "BH")
+```
+
+```{r, out.width="100%", fig.width = 16, fig.height = 12, message=FALSE}
+dotplot(e.hetionet, showCategory=20, font.size=20) +
+  theme(legend.key.size = unit(2, 'cm'), legend.text = element_text(size=25), legend.title = element_text(size=25))
+```
+
+# Supplementary materials
+
+## Enrichment with TCGA-WGCNA results
+
+```{r, message=FALSE}
+data.WGCNA <- read_csv("./WGCNA_genesInfo_log_mRNA.csv")
+```
+
+# WGCNA GO- Enrichment analysis
+
+```{r}
+
+modules.wgcna <- unique(data.WGCNA$moduleColor)
+universe.wgcna <- unique(data.WGCNA$...1)
+
+out <- data.frame()
+ont <- "BP"
+
+for(module in modules.wgcna){
+    
+    set <- data.WGCNA %>% dplyr::filter(moduleColor == module)
+      
+      ego.module <- enrichGO(gene = set$geneSymbol,
+                  universe = universe.wgcna,
+                  OrgDb = HS.annotation,
+                  ont = ont,
+                  keyType = "SYMBOL",
+                  pAdjustMethod = "BH")
+      
+      sub.out <- ego.module@result
+      sub.out["moduleColor"] <- module
+      
+      out <-  rbind(out, sub.out)
+}
+
+reorder_within <- function(x, by, within, fun = mean, sep = "___", ...) {
+    new_x <- paste(x, within, sep = sep)
+    stats::reorder(new_x, by, FUN = fun)
+}
+
+scale_x_reordered <- function(..., sep = "___") {
+    reg <- paste0(sep, ".+$")
+    ggplot2::scale_x_discrete(labels = function(x) gsub(reg, "", x), ...)
+}
+
+cols <- c("black"="black", "blue"="#2448c9", "brown"="#a12f2f", "green"="#2cc937", "grey"="#706c6c", "pink"="#e346a4", "red"="#e0282b", "turquoise"="turquoise", "yellow"="#e0cb28")
+# Colors
+
+
+```
+
+
+```{r, out.width="100%", fig.width = 16, fig.height = 12, message=FALSE}
+# Plot
+out %>% dplyr::select(ID, Description, qvalue, moduleColor) %>% 
+  group_by(moduleColor) %>% 
+  slice(1:10) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = reorder_within(Description, -log10(qvalue), moduleColor), y = -log10(qvalue), fill=moduleColor)) + 
+    geom_bar(stat = "identity") + 
+    coord_flip() + 
+    scale_fill_brewer(palette="Spectral") + 
+    theme_classic() + 
+    scale_x_reordered() +
+    scale_fill_manual(values = cols) +
+    theme(axis.text = element_text(size = 8)) +
+    facet_wrap(. ~ as.factor(moduleColor), scales="free_y") +
+    ggtitle(paste("WGCNA - ", ont))
+
+```
+
+
+- The enrichment is also module-specific
+
+### Vizualising the enrichment results on the DAG 
+```{r}
+modules.top.GO <- out %>% dplyr::select(ID, GeneRatio, BgRatio, qvalue, moduleColor) %>% 
+  group_by(moduleColor) %>% 
+  slice(1:10)
+GO.modules <- unique(modules.top.GO$ID)
+
+# Get all ancestors of each modules
+GO.modules.ancestors <- sapply(GO.modules, function(x) {GOBPANCESTOR[[x]]})
+GO.modules.hierarchy <- unique(c(GO.modules, unlist(GO.modules.ancestors)))
+
+# Map enrichment results
+GO.modules.hierarchy <- GO.modules.hierarchy[! is.na(GO.modules.hierarchy)]
+
+# Prepare nodes
+dom_graph <- prep_parents_graph(GO.modules.hierarchy)
+nodes <- dom_graph$nodes
+
+nodes <- nodes %>% 
+  left_join((ego@result %>% dplyr::select(ID, GeneRatio, BgRatio, qvalue)), by = c("id"="ID")) %>% 
+  mutate(label = paste(label, paste0("GeneRatio=", GeneRatio), paste0("BgRatio=", BgRatio), paste0("qvalue=", signif(qvalue, 3)), sep = "\n")) %>% 
+  dplyr::select(-c(GeneRatio, qvalue)) %>%
+  left_join( (modules.top.GO %>% dplyr::select(ID, moduleColor)), by = c("id"="ID")) %>%
+  mutate(color.background = moduleColor) %>%
+  replace_na(list(color.background = "white")) 
+nodes[nodes$color.background == "black", ]$font.color <- "white"
+
+# Plot graph 
+plot <- visNetwork(nodes, dom_graph$edges, width="100%", height = 1000,
+           main=paste0("Explore GO BP enrichment in GO DAG ontology"),) %>%
+    visOptions(highlightNearest = list(enabled = TRUE, algorithm = "hierarchical"), selectedBy = "label") %>%
+    visPhysics(solver = "hierarchicalRepulsion", hierarchicalRepulsion = list(avoidOverlap = 1)) %>%
+    visHierarchicalLayout(direction = "UD", blockShifting=FALSE, nodeSpacing=200) %>%
+    visLegend(addEdges = dom_graph$leg_edges)
+visSave(plot, "WGCNA_dag_vizu.html")
+
+```
+
+Visualize the graph on the exported html document: *WGCNA_dag_vizu.html*
+
+-  The enrichment also clusterise on the DAG graph.
+
+### Requests Hetionet to get the relations between genes in a same module
+
+```{r}
+query.module = paste0("MATCH (g:Gene)-[r]->(g2:Gene) WHERE g.name IN [", 
+                 paste0("'", paste0(data.WGCNA[data.WGCNA$moduleColor == "black", ]$geneSymbol, collapse = "' ,'"), "'"),
+                 "] AND g2.name IN [",
+                 paste0("'", paste0(data.WGCNA[data.WGCNA$moduleColor == "black", ]$geneSymbol, collapse = "' ,'"), "'"),
+                  "] RETURN g, r, g2")
+```
+
+- To visualize the corresponding graph, go send the query and visualize the graph on the [Neo4J browzer](https://neo4j.het.io/browser).
