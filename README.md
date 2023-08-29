@@ -33,26 +33,26 @@ You are required to bring your own laptop, more instructions will be communicate
 
 
 ## Schedule - CET time zone
-D0 - Sunday 3 September
+D0 - Sunday 3 September  
 Evening: arrival, check-in, dinner
 
-D1 - Monday 4 September
-Morning: general overview
+D1 - Monday 4 September  
+Morning: general overview  
 Afternoon: Multivariate statistical analyses
 
-D2 - Tuesday 5 September
-Morning: Multivariate statistical analyses
+D2 - Tuesday 5 September  
+Morning: Multivariate statistical analyses  
 Afternoon: Network-based approaches
 
-D3 - Wednesday 6 September
-Morning: Network-based approaches
+D3 - Wednesday 6 September  
+Morning: Network-based approaches  
 Afternoon: social activity
 
-D4 - Thursday 7 September
+D4 - Thursday 7 September  
 Morning & Afternoon: Results contextualisation: an introduction to metabolic models, web semantic and knowledge graphs
 
-D5 - Friday 8 September
-Presentations: Application to your research project
+D5 - Friday 8 September  
+Presentations: Application to your research project  
 ~14h: End of the event.
 
 ## Venue and Time
