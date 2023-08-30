@@ -28,10 +28,10 @@ Cytoscape (https://cytoscape.org/download.html, version >= 3.7) with these appli
 	- LegendCreator
 
 ## Topic 3
-dplyr
-tidyr
-readr
-visNetwork
-diffuStats
+dplyr  
+tidyr  
+readr  
+visNetwork  
+diffuStats  
 
 
