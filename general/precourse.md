@@ -1,7 +1,30 @@
 # Packages to install before the session
 
-## Topic 1
+R >= 4 with Rstudio or another IDE
+
+## Topic 1  
+
+### MOFA
+data.table  
+ggplot2  
+gage  
+MOFA2  
+MOFAdata  
+DT  
+msigdbr  
+
+### RGCCA
 
 ## Topic 2
+WGCNA  
+compositions  
+pheatmap  
+SNFtool  
+igraph  
+mixOmics  
 
-## Topic 2
+Cytoscape (https://cytoscape.org/download.html, version >= 3.7) with these applications :  
+	- yFiles Layout Algorithm
+	- LegendCreator
+
+## Topic 3
