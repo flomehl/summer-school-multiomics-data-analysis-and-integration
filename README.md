@@ -62,3 +62,10 @@ The event will start on Sunday evening and end on Friday around lunch time.
 
 ## Course material
 
+### Pre course install
+Lists of packages that will be used and need to be installed before the course can be found here [`List of packages`] (summer-school-multiomics-data-analysis-and-integration/general
+/precourse.md)  
+
+### datasets
+The datasets that will be used to train during the course and the publications with their descriptions can be found here [`datasets`] (summer-school-multiomics-data-analysis-and-integration/general
+/datasets/)  
