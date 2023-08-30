@@ -67,3 +67,4 @@ Lists of packages that will be used and need to be installed before the course c
 
 ### datasets
 The datasets that will be used to train during the course and the publications with their descriptions can be found [here](https://github.com/sib-swiss/summer-school-multiomics-data-analysis-and-integration/tree/master/general/datasets)  
+
